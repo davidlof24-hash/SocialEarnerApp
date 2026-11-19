@@ -11,6 +11,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -48,50 +49,65 @@ public class MainActivity extends AppCompatActivity {
         rootLayout.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // ১. মেইন ড্যাশবোর্ড WebView
-        mainWebView = new WebView(this);
-        setupWebView(mainWebView);
-        mainWebView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
-        mainWebView.setWebViewClient(new WebViewClient());
-        rootLayout.addView(mainWebView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        // ২. ব্যাকগ্রাউন্ড অটো-ফলো WebView
+        // ১. ব্যাকগ্রাউন্ড অটো-ফলো WebView (ফুল স্ক্রিন সাইজ, কিন্তু ড্যাশবোর্ডের পেছনে লুকানো)
         hiddenWebView = new WebView(this);
         setupWebView(hiddenWebView);
-        hiddenWebView.setVisibility(View.INVISIBLE);
         hiddenWebView.setWebViewClient(new WebViewClient() {
             @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                if (!url.startsWith("http://") && !url.startsWith("https://")) {
+                    return true; // fb:// বা intent:// অ্যাপে চলে যাওয়া আটকাবে
+                }
+                return false;
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
-                if (isFollowingTask) {
+                if (isFollowingTask && !url.equals("about:blank")) {
                     isFollowingTask = false;
                     new Handler(Looper.getMainLooper()).postDelayed(() -> {
                         String jsCode = "(function() {" +
-                                "var already = document.querySelector('[aria-label=\"Following\"], [aria-label=\"ফলো করছেন\"], [aria-label=\"Liked\"]');" +
+                                "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
+                                "var already = document.querySelector('[aria-label=\"Following\"], [aria-label=\"ফলো করছেন\"], [aria-label=\"Liked\"], [aria-label=\"লাইক করেছেন\"]');" +
                                 "if (already) return 'ALREADY';" +
-                                "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, span');" +
+                                "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, div[tabindex=\"0\"], span');" +
                                 "for (var i = 0; i < els.length; i++) {" +
-                                "  var t = (els[i].innerText || '').trim();" +
-                                "  var a = (els[i].getAttribute('aria-label') || '').trim();" +
-                                "  if (t === 'Follow' || t === 'ফলো করুন' || a === 'Follow' || a === 'ফলো করুন' || t === 'Like' || a === 'Like' || t === 'লাইক' || a === 'লাইক') {" +
+                                "  var t = (els[i].innerText || '').trim().toLowerCase();" +
+                                "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                                "  if (t === 'follow' || t === 'ফলো করুন' || a === 'follow' || a === 'ফলো করুন' || " +
+                                "      t === 'like' || t === 'লাইক' || a === 'like' || a === 'লাইক' || " +
+                                "      t === 'add friend' || a === 'add friend' || t === 'বন্ধু হিসেবে যোগ করুন') {" +
+                                "    els[i].scrollIntoView();" +
                                 "    els[i].click(); return 'CLICKED';" +
                                 "  }" +
                                 "}" +
-                                "return 'NOT_FOUND';" +
+                                "return 'NOT_FOUND_' + (document.title ? document.title.substring(0, 20) : 'EMPTY');" +
                                 "})();";
                         hiddenWebView.evaluateJavascript(jsCode, result -> {
                             String cleanResult = result != null ? result.replace("\"", "") : "ERROR";
                             new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                                hiddenWebView.loadUrl("about:blank");
                                 mainWebView.evaluateJavascript(
                                         "if(window.onNativeFollowDone) window.onNativeFollowDone(" + currentOrderId + ", '" + currentFbUid + "', '" + cleanResult + "');",
                                         null);
-                            }, 2500);
+                            }, 3000);
                         });
-                    }, 4000);
+                    }, 5500);
                 }
             }
         });
-        rootLayout.addView(hiddenWebView, new FrameLayout.LayoutParams(1, 1));
+        rootLayout.addView(hiddenWebView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // ২. মেইন ড্যাশবোর্ড WebView (এটি hiddenWebView-এর উপরে থেকে সব ঢেকে রাখবে)
+        mainWebView = new WebView(this);
+        setupWebView(mainWebView);
+        mainWebView.setBackgroundColor(Color.parseColor("#0b1329"));
+        mainWebView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
+        mainWebView.setWebViewClient(new WebViewClient());
+        rootLayout.addView(mainWebView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // ৩. ফেসবুক লগইন পপ-আপ কনটেইনার
         fbLoginContainer = new LinearLayout(this);
@@ -250,8 +266,8 @@ public class MainActivity extends AppCompatActivity {
                     for (String pair : savedCookie.split(";")) {
                         String p = pair.trim();
                         if (!p.isEmpty()) {
-                            cm.setCookie("https://.facebook.com", p);
-                            cm.setCookie("https://m.facebook.com", p);
+                            cm.setCookie("https://facebook.com", p + "; Domain=.facebook.com; Path=/");
+                            cm.setCookie("https://m.facebook.com", p + "; Domain=.facebook.com; Path=/");
                         }
                     }
                     cm.flush();
