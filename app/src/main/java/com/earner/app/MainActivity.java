@@ -11,7 +11,6 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
-import android.webkit.ValueCallback;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -36,6 +35,8 @@ public class MainActivity extends AppCompatActivity {
     private String currentFbUid = "";
 
     private SharedPreferences prefs;
+    private Handler loginCheckHandler = new Handler(Looper.getMainLooper());
+    private Runnable loginCheckRunnable;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -43,7 +44,6 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("FB_ACCOUNTS_VAULT", MODE_PRIVATE);
 
-        // মূল রুট লেআউট তৈরি
         FrameLayout rootLayout = new FrameLayout(this);
         rootLayout.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -56,7 +56,7 @@ public class MainActivity extends AppCompatActivity {
         rootLayout.addView(mainWebView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // ২. ব্যাকগ্রাউন্ড অটো-ফলো WebView (অদৃশ্য)
+        // ২. ব্যাকগ্রাউন্ড অটো-ফলো WebView
         hiddenWebView = new WebView(this);
         setupWebView(hiddenWebView);
         hiddenWebView.setVisibility(View.INVISIBLE);
@@ -102,20 +102,30 @@ public class MainActivity extends AppCompatActivity {
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setBackgroundColor(Color.parseColor("#1877F2"));
-        topBar.setPadding(20, 20, 20, 20);
+        topBar.setPadding(15, 15, 15, 15);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView title = new TextView(this);
-        title.setText("ফেসবুক আইডি লগইন করুন");
+        title.setText("ফেসবুক লগইন");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(16);
+        title.setTextSize(15);
         title.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
+        Button saveNowBtn = new Button(this);
+        saveNowBtn.setText("✅ সেভ করুন");
+        saveNowBtn.setBackgroundColor(Color.parseColor("#10B981"));
+        saveNowBtn.setTextColor(Color.WHITE);
+        saveNowBtn.setOnClickListener(v -> checkAndSaveLogin(true));
+
         Button closeBtn = new Button(this);
-        closeBtn.setText("বাতিল (Close)");
-        closeBtn.setOnClickListener(v -> fbLoginContainer.setVisibility(View.GONE));
+        closeBtn.setText("বাতিল");
+        closeBtn.setOnClickListener(v -> {
+            loginCheckHandler.removeCallbacksAndMessages(null);
+            fbLoginContainer.setVisibility(View.GONE);
+        });
 
         topBar.addView(title);
+        topBar.addView(saveNowBtn);
         topBar.addView(closeBtn);
         fbLoginContainer.addView(topBar);
 
@@ -124,28 +134,7 @@ public class MainActivity extends AppCompatActivity {
         fbLoginWebView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (loginHandled) return;
-                String cookies = CookieManager.getInstance().getCookie("https://m.facebook.com");
-                if (cookies != null && cookies.contains("c_user=") && cookies.contains("xs=")) {
-                    String uid = "";
-                    for (String part : cookies.split(";")) {
-                        String p = part.trim();
-                        if (p.startsWith("c_user=")) {
-                            uid = p.substring(7);
-                            break;
-                        }
-                    }
-                    if (!uid.isEmpty()) {
-                        loginHandled = true;
-                        saveFbCookie(uid, cookies);
-                        final String finalUid = uid;
-                        runOnUiThread(() -> {
-                            fbLoginContainer.setVisibility(View.GONE);
-                            Toast.makeText(MainActivity.this, "ফেসবুক আইডি (" + finalUid + ") যুক্ত হয়েছে!", Toast.LENGTH_SHORT).show();
-                            mainWebView.evaluateJavascript("if(window.onNativeFbAdded) window.onNativeFbAdded('" + finalUid + "');", null);
-                        });
-                    }
-                }
+                checkAndSaveLogin(false);
             }
         });
         fbLoginContainer.addView(fbLoginWebView, new LinearLayout.LayoutParams(
@@ -156,6 +145,53 @@ public class MainActivity extends AppCompatActivity {
 
         setContentView(rootLayout);
         mainWebView.loadUrl(APP_URL);
+    }
+
+    private void checkAndSaveLogin(boolean manualClick) {
+        if (loginHandled) return;
+        CookieManager.getInstance().flush();
+        String c1 = CookieManager.getInstance().getCookie("https://m.facebook.com");
+        String c2 = CookieManager.getInstance().getCookie("https://www.facebook.com");
+        String cookies = (c1 != null && c1.contains("c_user=")) ? c1 : c2;
+
+        if (cookies != null && cookies.contains("c_user=")) {
+            String uid = "";
+            for (String part : cookies.split(";")) {
+                String p = part.trim();
+                if (p.startsWith("c_user=")) {
+                    uid = p.substring(7);
+                    break;
+                }
+            }
+            if (!uid.isEmpty()) {
+                loginHandled = true;
+                loginCheckHandler.removeCallbacksAndMessages(null);
+                saveFbCookie(uid, cookies);
+                final String finalUid = uid;
+                runOnUiThread(() -> {
+                    fbLoginContainer.setVisibility(View.GONE);
+                    Toast.makeText(MainActivity.this, "আইডি (" + finalUid + ") সেভ হয়েছে!", Toast.LENGTH_SHORT).show();
+                    mainWebView.evaluateJavascript("if(window.onNativeFbAdded) window.onNativeFbAdded('" + finalUid + "');", null);
+                });
+                return;
+            }
+        }
+        if (manualClick) {
+            Toast.makeText(this, "আগে ফেসবুকে লগইন সম্পন্ন করুন!", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void startLoginPolling() {
+        loginCheckRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (!loginHandled && fbLoginContainer.getVisibility() == View.VISIBLE) {
+                    checkAndSaveLogin(false);
+                    loginCheckHandler.postDelayed(this, 1500);
+                }
+            }
+        };
+        loginCheckHandler.postDelayed(loginCheckRunnable, 1500);
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -194,6 +230,7 @@ public class MainActivity extends AppCompatActivity {
                     CookieManager.getInstance().flush();
                     fbLoginContainer.setVisibility(View.VISIBLE);
                     fbLoginWebView.loadUrl("https://m.facebook.com");
+                    startLoginPolling();
                 });
             });
         }
@@ -229,6 +266,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onBackPressed() {
         if (fbLoginContainer.getVisibility() == View.VISIBLE) {
+            loginCheckHandler.removeCallbacksAndMessages(null);
             fbLoginContainer.setVisibility(View.GONE);
         } else if (mainWebView.canGoBack()) {
             mainWebView.goBack();
