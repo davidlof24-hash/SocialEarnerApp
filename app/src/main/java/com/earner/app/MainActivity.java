@@ -6,6 +6,7 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -37,6 +38,7 @@ public class MainActivity extends AppCompatActivity {
 
     private SharedPreferences prefs;
     private Handler loginCheckHandler = new Handler(Looper.getMainLooper());
+    private Handler followHandler = new Handler(Looper.getMainLooper());
     private Runnable loginCheckRunnable;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -49,7 +51,7 @@ public class MainActivity extends AppCompatActivity {
         rootLayout.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // ১. ব্যাকগ্রাউন্ড অটো-ফলো WebView (ফুল স্ক্রিন সাইজ, কিন্তু ড্যাশবোর্ডের পেছনে লুকানো)
+        // ১. ব্যাকগ্রাউন্ড অটো-ফলো WebView (ফুল স্ক্রিন সাইজ, ড্যাশবোর্ডের পেছনে)
         hiddenWebView = new WebView(this);
         setupWebView(hiddenWebView);
         hiddenWebView.setWebViewClient(new WebViewClient() {
@@ -57,7 +59,7 @@ public class MainActivity extends AppCompatActivity {
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                    return true; // fb:// বা intent:// অ্যাপে চলে যাওয়া আটকাবে
+                    return true;
                 }
                 return false;
             }
@@ -65,13 +67,16 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 if (isFollowingTask && !url.equals("about:blank")) {
-                    isFollowingTask = false;
-                    new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    followHandler.removeCallbacksAndMessages(null);
+                    followHandler.postDelayed(() -> {
+                        if (!isFollowingTask) return;
+                        isFollowingTask = false;
+
                         String jsCode = "(function() {" +
                                 "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
                                 "var already = document.querySelector('[aria-label=\"Following\"], [aria-label=\"ফলো করছেন\"], [aria-label=\"Liked\"], [aria-label=\"লাইক করেছেন\"]');" +
                                 "if (already) return 'ALREADY';" +
-                                "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, div[tabindex=\"0\"], span');" +
+                                "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, div[tabindex=\"0\"], span, a');" +
                                 "for (var i = 0; i < els.length; i++) {" +
                                 "  var t = (els[i].innerText || '').trim().toLowerCase();" +
                                 "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
@@ -84,6 +89,7 @@ public class MainActivity extends AppCompatActivity {
                                 "}" +
                                 "return 'NOT_FOUND_' + (document.title ? document.title.substring(0, 20) : 'EMPTY');" +
                                 "})();";
+
                         hiddenWebView.evaluateJavascript(jsCode, result -> {
                             String cleanResult = result != null ? result.replace("\"", "") : "ERROR";
                             new Handler(Looper.getMainLooper()).postDelayed(() -> {
@@ -100,7 +106,7 @@ public class MainActivity extends AppCompatActivity {
         rootLayout.addView(hiddenWebView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // ২. মেইন ড্যাশবোর্ড WebView (এটি hiddenWebView-এর উপরে থেকে সব ঢেকে রাখবে)
+        // ২. মেইন ড্যাশবোর্ড WebView
         mainWebView = new WebView(this);
         setupWebView(mainWebView);
         mainWebView.setBackgroundColor(Color.parseColor("#0b1329"));
@@ -183,11 +189,16 @@ public class MainActivity extends AppCompatActivity {
                 loginHandled = true;
                 loginCheckHandler.removeCallbacksAndMessages(null);
                 saveFbCookie(uid, cookies);
+                String b64Cookie = "";
+                try {
+                    b64Cookie = Base64.encodeToString(cookies.getBytes("UTF-8"), Base64.NO_WRAP);
+                } catch (Exception ignored) {}
                 final String finalUid = uid;
+                final String finalB64 = b64Cookie;
                 runOnUiThread(() -> {
                     fbLoginContainer.setVisibility(View.GONE);
                     Toast.makeText(MainActivity.this, "আইডি (" + finalUid + ") সেভ হয়েছে!", Toast.LENGTH_SHORT).show();
-                    mainWebView.evaluateJavascript("if(window.onNativeFbAdded) window.onNativeFbAdded('" + finalUid + "');", null);
+                    mainWebView.evaluateJavascript("if(window.onNativeFbAdded) window.onNativeFbAdded('" + finalUid + "', '" + finalB64 + "');", null);
                 });
                 return;
             }
@@ -252,18 +263,26 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @JavascriptInterface
-        public void runFollowTask(int orderId, String targetUrl, String uid) {
+        public void runFollowTask(int orderId, String targetUrl, String uid, String b64ServerCookie) {
             runOnUiThread(() -> {
                 String savedCookie = getFbCookie(uid);
+                if (savedCookie.isEmpty() && b64ServerCookie != null && !b64ServerCookie.isEmpty()) {
+                    try {
+                        savedCookie = new String(Base64.decode(b64ServerCookie, Base64.DEFAULT), "UTF-8");
+                        saveFbCookie(uid, savedCookie);
+                    } catch (Exception ignored) {}
+                }
+
                 if (savedCookie.isEmpty()) {
                     mainWebView.evaluateJavascript("if(window.onNativeFollowDone) window.onNativeFollowDone(" + orderId + ", '" + uid + "', 'NO_COOKIE');", null);
                     return;
                 }
                 currentOrderId = orderId;
                 currentFbUid = uid;
+                final String finalCookie = savedCookie;
                 CookieManager cm = CookieManager.getInstance();
                 cm.removeAllCookies(unused -> {
-                    for (String pair : savedCookie.split(";")) {
+                    for (String pair : finalCookie.split(";")) {
                         String p = pair.trim();
                         if (!p.isEmpty()) {
                             cm.setCookie("https://facebook.com", p + "; Domain=.facebook.com; Path=/");
