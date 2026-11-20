@@ -15,7 +15,9 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Base64;
+import android.view.MotionEvent;
 import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.SslErrorHandler;
@@ -97,7 +99,7 @@ public class AutoPilotService extends Service {
             public void onPageFinished(WebView view, String url) {
                 if (isFollowingTask && !url.equals("about:blank")) {
                     mainHandler.removeCallbacks(executeJsRunnable);
-                    int delay = currentActionType.equalsIgnoreCase("View") ? 18000 : 6000;
+                    int delay = currentActionType.equalsIgnoreCase("View") ? 18000 : 6500;
                     mainHandler.postDelayed(executeJsRunnable, delay);
                 }
             }
@@ -118,7 +120,6 @@ public class AutoPilotService extends Service {
             if (!isFollowingTask) return;
             isFollowingTask = false;
 
-            // ১. ভিডিও ভিউ (View)
             if (currentActionType.equalsIgnoreCase("View")) {
                 serviceWebView.evaluateJavascript("var v=document.querySelector('video'); if(v) v.play(); 'VIEWED';", r -> {
                     mainHandler.postDelayed(() -> {
@@ -129,7 +130,6 @@ public class AutoPilotService extends Service {
                 return;
             }
 
-            // ২. ফলো (Follow)
             if (currentActionType.equalsIgnoreCase("Follow")) {
                 String jsFollow = "(function() {" +
                         "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
@@ -150,126 +150,180 @@ public class AutoPilotService extends Service {
                 return;
             }
 
-            // ৩. লাইক (Default Like)
             if (currentActionType.equalsIgnoreCase("Like")) {
-                String jsLike = "(function() {" +
-                        "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
-                        "var already = document.querySelector('[aria-label=\"Remove Like\"], [aria-label=\"Unlike\"], [aria-label=\"লাইক তুলে নিন\"]');" +
-                        "if (already) return 'ALREADY_LIKED';" +
-                        "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, div[tabindex=\"0\"], span');" +
-                        "for (var i = 0; i < els.length; i++) {" +
-                        "  var t = (els[i].innerText || '').trim().toLowerCase();" +
-                        "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
-                        "  if (t === 'like' || t === 'লাইক' || a === 'like' || a === 'লাইক') {" +
-                        "    els[i].scrollIntoView(); els[i].click(); return 'CLICKED';" +
-                        "  }" +
-                        "}" +
-                        "return 'NOT_FOUND';" +
-                        "})();";
-                runSingleStepJs(jsLike);
+                serviceWebView.evaluateJavascript("window.scrollBy(0, 350);", unused -> {
+                    mainHandler.postDelayed(() -> {
+                        String jsLike = "(function() {" +
+                                "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
+                                "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, span, a');" +
+                                "for (var i = 0; i < els.length; i++) {" +
+                                "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                                "  if (a.startsWith('unlike') || a.startsWith('remove like') || a.includes('লাইক তুলে নিন')) return 'ALREADY_LIKED';" +
+                                "}" +
+                                "for (var i = 0; i < els.length; i++) {" +
+                                "  var t = (els[i].innerText || '').trim().toLowerCase();" +
+                                "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                                "  var validAria = (a === 'like' || a === 'লাইক' || a.startsWith('like,') || a.startsWith('like ') || a.includes('like this') || a.includes('like button') || a.startsWith('লাইক'));" +
+                                "  if ((validAria && !a.includes('including') && !a.includes('who reacted') && !a.includes('people')) || t === 'like' || t === 'লাইক') {" +
+                                "    els[i].scrollIntoView({block:'center'});" +
+                                "    els[i].click(); return 'CLICKED';" +
+                                "  }" +
+                                "}" +
+                                "return 'NOT_FOUND';" +
+                                "})();";
+                        runSingleStepJs(jsLike);
+                    }, 1200);
+                });
                 return;
             }
 
-            // ৪. কাস্টম রিঅ্যাকশন (Love, Haha, Wow, Sad, Angry)
             if (currentActionType.equalsIgnoreCase("Love") || currentActionType.equalsIgnoreCase("Haha") ||
                 currentActionType.equalsIgnoreCase("Wow") || currentActionType.equalsIgnoreCase("Sad") ||
                 currentActionType.equalsIgnoreCase("Angry")) {
 
-                String openTrayJs = "(function() {" +
-                        "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, span');" +
-                        "for (var i = 0; i < els.length; i++) {" +
-                        "  var t = (els[i].innerText || '').trim().toLowerCase();" +
-                        "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
-                        "  if (t === 'like' || t === 'লাইক' || a === 'like' || a === 'লাইক') {" +
-                        "    els[i].scrollIntoView();" +
-                        "    els[i].dispatchEvent(new MouseEvent('mouseover', {bubbles:true}));" +
-                        "    els[i].dispatchEvent(new TouchEvent('touchstart', {bubbles:true}));" +
-                        "    return 'TRAY_TRIGGERED';" +
-                        "  }" +
-                        "}" +
-                        "return 'NOT_FOUND';" +
-                        "})();";
-
-                serviceWebView.evaluateJavascript(openTrayJs, res -> {
+                serviceWebView.evaluateJavascript("window.scrollBy(0, 350);", unused -> {
                     mainHandler.postDelayed(() -> {
-                        String reactTarget = currentActionType.toLowerCase();
-                        String banglaTarget = reactTarget;
-                        if (reactTarget.equals("love")) banglaTarget = "ভালোবাসা";
-                        else if (reactTarget.equals("haha")) banglaTarget = "হাহা";
-                        else if (reactTarget.equals("wow")) banglaTarget = "ওয়াও";
-                        else if (reactTarget.equals("sad")) banglaTarget = "দুঃখিত";
-                        else if (reactTarget.equals("angry")) banglaTarget = "রাগ";
-
-                        String clickReactJs = "(function() {" +
-                                "var els = document.querySelectorAll('[aria-label]');" +
-                                "for (var i = 0; i < els.length; i++) {" +
-                                "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
-                                "  if (a === '" + reactTarget + "' || a === '" + banglaTarget + "') {" +
-                                "    els[i].click(); return 'CLICKED';" +
-                                "  }" +
-                                "}" +
-                                "return 'REACT_NOT_FOUND';" +
-                                "})();";
-                        runSingleStepJs(clickReactJs);
-                    }, 1500);
-                });
-                return;
-            }
-
-            // ৫. পোস্ট শেয়ার (Share)
-            if (currentActionType.equalsIgnoreCase("Share")) {
-                String openShareJs = "(function() {" +
-                        "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, span');" +
-                        "for (var i = 0; i < els.length; i++) {" +
-                        "  var t = (els[i].innerText || '').trim().toLowerCase();" +
-                        "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
-                        "  if (t === 'share' || t === 'শেয়ার' || t === 'শেয়ার' || a.includes('share') || a.includes('শেয়ার')) {" +
-                        "    els[i].scrollIntoView(); els[i].click(); return 'OPENED';" +
-                        "  }" +
-                        "}" +
-                        "return 'NOT_FOUND';" +
-                        "})();";
-
-                serviceWebView.evaluateJavascript(openShareJs, res -> {
-                    mainHandler.postDelayed(() -> {
-                        String clickShareNowJs = "(function() {" +
-                                "var els = document.querySelectorAll('div[role=\"menuitem\"], div[role=\"button\"], span, a');" +
+                        String findLikeCoordsJs = "(function() {" +
+                                "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, span, a');" +
                                 "for (var i = 0; i < els.length; i++) {" +
                                 "  var t = (els[i].innerText || '').trim().toLowerCase();" +
-                                "  if (t.includes('share now') || t.includes('এখনই শেয়ার') || t.includes('এখনই শেয়ার') || t.includes('share to feed')) {" +
-                                "    els[i].click(); return 'CLICKED';" +
+                                "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                                "  var validAria = (a === 'like' || a === 'লাইক' || a.startsWith('like,') || a.startsWith('like ') || a.includes('like this') || a.includes('like button') || a.startsWith('লাইক'));" +
+                                "  if ((validAria && !a.includes('including') && !a.includes('who reacted')) || t === 'like' || t === 'লাইক') {" +
+                                "    els[i].scrollIntoView({block:'center'});" +
+                                "    var r = els[i].getBoundingClientRect();" +
+                                "    var dpr = window.devicePixelRatio || 1;" +
+                                "    return Math.round((r.left + r.width/2) * dpr) + ',' + Math.round((r.top + r.height/2) * dpr);" +
                                 "  }" +
                                 "}" +
-                                "return 'SHARE_NOW_NOT_FOUND';" +
+                                "return 'NOT_FOUND';" +
                                 "})();";
-                        runSingleStepJs(clickShareNowJs);
-                    }, 2500);
+
+                        serviceWebView.evaluateJavascript(findLikeCoordsJs, coordsRes -> {
+                            String cleanCoords = coordsRes != null ? coordsRes.replace("\"", "") : "NOT_FOUND";
+                            if (!cleanCoords.contains(",")) {
+                                serviceWebView.loadUrl("about:blank");
+                                finishTaskOnServer("LIKE_BTN_NOT_FOUND");
+                                return;
+                            }
+
+                            try {
+                                String[] parts = cleanCoords.split(",");
+                                float tapX = Float.parseFloat(parts[0]);
+                                float tapY = Float.parseFloat(parts[1]);
+
+                                long downTime = SystemClock.uptimeMillis();
+                                MotionEvent downEvent = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, tapX, tapY, 0);
+                                serviceWebView.dispatchTouchEvent(downEvent);
+
+                                mainHandler.postDelayed(() -> {
+                                    long upTime = SystemClock.uptimeMillis();
+                                    MotionEvent upEvent = MotionEvent.obtain(downTime, upTime, MotionEvent.ACTION_UP, tapX, tapY, 0);
+                                    serviceWebView.dispatchTouchEvent(upEvent);
+                                    downEvent.recycle();
+                                    upEvent.recycle();
+
+                                    mainHandler.postDelayed(() -> {
+                                        String reactTarget = currentActionType.toLowerCase();
+                                        String banglaTarget = reactTarget;
+                                        if (reactTarget.equals("love")) banglaTarget = "ভালোবাসা";
+                                        else if (reactTarget.equals("haha")) banglaTarget = "হাহা";
+                                        else if (reactTarget.equals("wow")) banglaTarget = "ওয়াও";
+                                        else if (reactTarget.equals("sad")) banglaTarget = "দুঃখিত";
+                                        else if (reactTarget.equals("angry")) banglaTarget = "রাগ";
+
+                                        String clickReactJs = "(function() {" +
+                                                "var els = document.querySelectorAll('[aria-label]');" +
+                                                "for (var i = 0; i < els.length; i++) {" +
+                                                "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                                                "  if (a === '" + reactTarget + "' || a === '" + banglaTarget + "' || a.includes('" + reactTarget + "')) {" +
+                                                "    els[i].click(); return 'CLICKED';" +
+                                                "  }" +
+                                                "}" +
+                                                "return 'REACT_TRAY_NOT_OPEN';" +
+                                                "})();";
+                                        runSingleStepJs(clickReactJs);
+                                    }, 1200);
+                                }, 850);
+                            } catch (Exception e) {
+                                serviceWebView.loadUrl("about:blank");
+                                finishTaskOnServer("TOUCH_ERR");
+                            }
+                        });
+                    }, 1200);
                 });
                 return;
             }
 
-            // ৬. পোস্ট কমেন্ট (Comment)
+            if (currentActionType.equalsIgnoreCase("Share")) {
+                serviceWebView.evaluateJavascript("window.scrollBy(0, 350);", unused -> {
+                    mainHandler.postDelayed(() -> {
+                        String openShareJs = "(function() {" +
+                                "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, span, a');" +
+                                "for (var i = 0; i < els.length; i++) {" +
+                                "  var t = (els[i].innerText || '').trim().toLowerCase();" +
+                                "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                                "  if (t === 'share' || t === 'শেয়ার' || t === 'শেয়ার' || a === 'share' || a.includes('send this to friends') || a.includes('শেয়ার')) {" +
+                                "    els[i].scrollIntoView({block:'center'}); els[i].click(); return 'OPENED';" +
+                                "  }" +
+                                "}" +
+                                "return 'NOT_FOUND';" +
+                                "})();";
+
+                        serviceWebView.evaluateJavascript(openShareJs, res -> {
+                            mainHandler.postDelayed(() -> {
+                                String clickShareNowJs = "(function() {" +
+                                        "var els = document.querySelectorAll('div[role=\"menuitem\"], div[role=\"button\"], span, a, button');" +
+                                        "for (var i = 0; i < els.length; i++) {" +
+                                        "  var t = (els[i].innerText || '').trim().toLowerCase();" +
+                                        "  if (t.includes('share now') || t.includes('এখনই শেয়ার') || t.includes('এখনই শেয়ার') || t.includes('share to feed') || t.includes('write post')) {" +
+                                        "    els[i].click(); return 'CLICKED';" +
+                                        "  }" +
+                                        "}" +
+                                        "return 'SHARE_NOW_NOT_FOUND';" +
+                                        "})();";
+                                runSingleStepJs(clickShareNowJs);
+                            }, 2500);
+                        });
+                    }, 1200);
+                });
+                return;
+            }
+
             if (currentActionType.equalsIgnoreCase("Comment")) {
                 String safeComment = currentCommentText.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ");
                 if (safeComment.isEmpty()) safeComment = "Nice!";
-                String jsComment = "(function() {" +
-                        "var box = document.querySelector('textarea, div[role=\"textbox\"], input[placeholder*=\"comment\"], input[placeholder*=\"মন্তব্য\"]');" +
-                        "if (box) {" +
-                        "  box.focus();" +
-                        "  if (box.tagName === 'TEXTAREA' || box.tagName === 'INPUT') { box.value = '" + safeComment + "'; } else { box.innerText = '" + safeComment + "'; }" +
-                        "  box.dispatchEvent(new Event('input', {bubbles:true}));" +
-                        "  var btns = document.querySelectorAll('button, div[role=\"button\"], input[type=\"submit\"]');" +
-                        "  for (var i = 0; i < btns.length; i++) {" +
-                        "    var a = (btns[i].getAttribute('aria-label') || '').toLowerCase();" +
-                        "    var t = (btns[i].innerText || '').trim().toLowerCase();" +
-                        "    if (a.includes('post') || a.includes('comment') || a.includes('পোস্ট') || t === 'post' || t === 'পোস্ট') {" +
-                        "      btns[i].click(); return 'CLICKED';" +
-                        "    }" +
-                        "  }" +
-                        "}" +
-                        "return 'NOT_FOUND';" +
-                        "})();";
-                runSingleStepJs(jsComment);
+                final String finalSafeComment = safeComment;
+                serviceWebView.evaluateJavascript("window.scrollBy(0, 450);", unused -> {
+                    mainHandler.postDelayed(() -> {
+                        String jsComment = "(function() {" +
+                                "var box = document.querySelector('textarea, div[role=\"textbox\"], input[placeholder*=\"comment\"], input[placeholder*=\"মন্তব্য\"]');" +
+                                "if (!box) {" +
+                                "  var cBtns = document.querySelectorAll('div[role=\"button\"], a, span');" +
+                                "  for (var k=0; k<cBtns.length; k++) {" +
+                                "    var ct = (cBtns[k].innerText || '').trim().toLowerCase();" +
+                                "    if (ct === 'comment' || ct === 'মন্তব্য') { cBtns[k].click(); break; }" +
+                                "  }" +
+                                "  box = document.querySelector('textarea, div[role=\"textbox\"], input[placeholder*=\"comment\"]');" +
+                                "}" +
+                                "if (box) {" +
+                                "  box.focus();" +
+                                "  if (box.tagName === 'TEXTAREA' || box.tagName === 'INPUT') { box.value = '" + finalSafeComment + "'; } else { box.innerText = '" + finalSafeComment + "'; }" +
+                                "  box.dispatchEvent(new Event('input', {bubbles:true}));" +
+                                "  var btns = document.querySelectorAll('button, div[role=\"button\"], input[type=\"submit\"]');" +
+                                "  for (var i = 0; i < btns.length; i++) {" +
+                                "    var a = (btns[i].getAttribute('aria-label') || '').toLowerCase();" +
+                                "    var t = (btns[i].innerText || '').trim().toLowerCase();" +
+                                "    if (a.includes('post') || a.includes('send') || a.includes('পোস্ট') || t === 'post' || t === 'পোস্ট') {" +
+                                "      btns[i].click(); return 'CLICKED';" +
+                                "    }" +
+                                "  }" +
+                                "}" +
+                                "return 'NOT_FOUND';" +
+                                "})();";
+                        runSingleStepJs(jsComment);
+                    }, 1500);
+                });
             }
         }
     };
@@ -326,7 +380,7 @@ public class AutoPilotService extends Service {
         }
 
         if (isBusy) {
-            if (System.currentTimeMillis() - busyStartTime > 40000) {
+            if (System.currentTimeMillis() - busyStartTime > 45000) {
                 isBusy = false;
             } else {
                 return;
