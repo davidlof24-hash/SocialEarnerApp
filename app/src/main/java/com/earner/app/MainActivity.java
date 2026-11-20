@@ -217,7 +217,10 @@ public class MainActivity extends Activity {
         public void setWorkerId(int workerId) {
             prefs.edit().putInt("active_worker_id", workerId).apply();
         }
-
+@JavascriptInterface
+        public String getLiveStatus() {
+            return prefs.getString("live_status", "⚡ অটো-পাইলট সচল আছে...");
+        }
         @JavascriptInterface
         public void openFbLogin() {
             runOnUiThread(() -> {
