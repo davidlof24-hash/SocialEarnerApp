@@ -16,6 +16,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Base64;
+import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebResourceRequest;
@@ -62,12 +63,21 @@ public class AutoPilotService extends Service {
             wakeLock.acquire();
         }
 
-        // ব্যাকগ্রাউন্ডের নিজস্ব WebView তৈরি
         serviceWebView = new WebView(getApplicationContext());
+        // ব্যাকগ্রাউন্ডে ফুল মোবাইল স্ক্রিন রেন্ডার করার জন্য জরুরি সেটিংস
+        serviceWebView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+        serviceWebView.measure(
+                View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(1920, View.MeasureSpec.EXACTLY)
+        );
+        serviceWebView.layout(0, 0, 1080, 1920);
+
         WebSettings ws = serviceWebView.getSettings();
         ws.setJavaScriptEnabled(true);
         ws.setDomStorageEnabled(true);
         ws.setDatabaseEnabled(true);
+        ws.setAllowFileAccess(true);
+        ws.setAllowContentAccess(true);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(serviceWebView, true);
 
@@ -87,13 +97,19 @@ public class AutoPilotService extends Service {
             public void onPageFinished(WebView view, String url) {
                 if (isFollowingTask && !url.equals("about:blank")) {
                     mainHandler.removeCallbacks(executeJsRunnable);
-                    int delay = currentActionType.equalsIgnoreCase("View") ? 15000 : 5500;
+                    int delay = currentActionType.equalsIgnoreCase("View") ? 15000 : 6000;
                     mainHandler.postDelayed(executeJsRunnable, delay);
                 }
             }
         });
 
+        setLiveStatus("⚡ ২৪/৭ ব্যাকগ্রাউন্ড অটো-পাইলট কাজের জন্য প্রস্তুত!");
         startAutoLoop();
+    }
+
+    private void setLiveStatus(String text) {
+        prefs.edit().putString("live_status", text).apply();
+        mainHandler.post(() -> updateNotification(text));
     }
 
     private final Runnable executeJsRunnable = new Runnable() {
@@ -122,7 +138,7 @@ public class AutoPilotService extends Service {
                     "    els[i].click(); return 'CLICKED';" +
                     "  }" +
                     "}" +
-                    "return 'NOT_FOUND';" +
+                    "return 'NOT_FOUND_' + (document.title ? document.title.substring(0, 15) : '');" +
                     "})();";
 
             serviceWebView.evaluateJavascript(jsCode, result -> {
@@ -145,10 +161,14 @@ public class AutoPilotService extends Service {
                     body.put("fb_uid", currentFbUid);
                     body.put("action_type", currentActionType);
                     httpPost(SERVER_URL + "/api/complete-task", body.toString());
-                } catch (Exception ignored) {}
+                    setLiveStatus("✅ আইডি (" + currentFbUid + ") অর্ডার #" + currentOrderId + " সম্পন্ন করেছে!");
+                } catch (Exception e) {
+                    setLiveStatus("⚠️ সার্ভার আপডেট এরর: " + e.getMessage());
+                }
                 isBusy = false;
             });
         } else {
+            setLiveStatus("⚠️ অর্ডার #" + currentOrderId + " (" + currentFbUid + "): " + status);
             isBusy = false;
         }
     }
@@ -158,16 +178,19 @@ public class AutoPilotService extends Service {
             @Override
             public void run() {
                 checkServerForTasks();
-                mainHandler.postDelayed(this, 12000); // প্রতি ১২ সেকেন্ড পর পর ব্যাকগ্রাউন্ডে চেক
+                mainHandler.postDelayed(this, 10000);
             }
-        }, 5000);
+        }, 3000);
     }
 
     private void checkServerForTasks() {
         if (prefs.getBoolean("is_user_logging_in", false)) return;
 
         int workerId = prefs.getInt("active_worker_id", 0);
-        if (workerId <= 0) return;
+        if (workerId <= 0) {
+            setLiveStatus("ℹ️ ইউজার আইডি সক্রিয় করতে অ্যাপে একবার লগইন করুন।");
+            return;
+        }
 
         if (isBusy) {
             if (System.currentTimeMillis() - busyStartTime > 35000) {
@@ -206,16 +229,28 @@ public class AutoPilotService extends Service {
                             currentFbUid = uid;
                             currentActionType = actionType;
 
+                            setLiveStatus("🚀 আইডি (" + uid + ") দিয়ে অর্ডার #" + orderId + " ফলো চলছে...");
                             mainHandler.post(() -> runBackgroundWebView(targetUrl, cookieStr));
                             break;
+                        } else {
+                            setLiveStatus("⚠️ আইডি (" + uid + ") এর কুকি পাওয়া যায়নি!");
                         }
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                setLiveStatus("⚠️ নেটওয়ার্ক চেকিং...");
+            }
         });
     }
 
     private void runBackgroundWebView(String targetUrl, String cookieStr) {
+        serviceWebView.resumeTimers();
+        serviceWebView.measure(
+                View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(1920, View.MeasureSpec.EXACTLY)
+        );
+        serviceWebView.layout(0, 0, 1080, 1920);
+
         CookieManager cm = CookieManager.getInstance();
         cm.removeAllCookies(unused -> {
             for (String pair : cookieStr.split(";")) {
@@ -271,33 +306,40 @@ public class AutoPilotService extends Service {
         conn.getResponseCode();
     }
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        createNotificationChannel();
+    private Notification buildNotification(String text) {
         Intent notificationIntent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
-
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             builder = new Notification.Builder(this, CHANNEL_ID);
         } else {
             builder = new Notification.Builder(this);
         }
-
-        Notification notification = builder
-                .setContentTitle("⚡ F2fearn Auto-Pilot চালু আছে")
-                .setContentText("অ্যাপ বন্ধ থাকলেও ব্যাকগ্রাউন্ডে অটো ইনকাম চলছে...")
+        return builder
+                .setContentTitle("⚡ F2fearn Auto-Pilot")
+                .setContentText(text)
                 .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .build();
+    }
 
+    private void updateNotification(String text) {
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.notify(101, buildNotification(text));
+        }
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        createNotificationChannel();
+        Notification notification = buildNotification("ব্যাকগ্রাউন্ডে অটো ইনকাম চলছে...");
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(101, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
         } else {
             startForeground(101, notification);
         }
-
         return START_STICKY;
     }
 
