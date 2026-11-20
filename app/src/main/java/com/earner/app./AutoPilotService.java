@@ -96,7 +96,10 @@ public class AutoPilotService extends Service {
             public void onPageFinished(WebView view, String url) {
                 if (isFollowingTask && !url.equals("about:blank")) {
                     mainHandler.removeCallbacks(executeJsRunnable);
-                    int delay = currentActionType.equalsIgnoreCase("View") ? 18000 : 7000;
+                    // ডেস্কটপ ও শেয়ার লিংক পুরো লোড হতে ১০ সেকেন্ড, ফলো হতে ৬ সেকেন্ড, ভিউ ১৮ সেকেন্ড
+                    int delay = 6000;
+                    if (currentActionType.equalsIgnoreCase("View")) delay = 18000;
+                    else if (!currentActionType.equalsIgnoreCase("Follow")) delay = 10000;
                     mainHandler.postDelayed(executeJsRunnable, delay);
                 }
             }
@@ -128,7 +131,7 @@ public class AutoPilotService extends Service {
                 return;
             }
 
-            // ২. ফলো (Mobile Web - এটি ১০০% সফল)
+            // ২. ফলো (Follow - মোবাইল ভার্সন)
             if (currentActionType.equalsIgnoreCase("Follow")) {
                 String jsFollow = "(function() {" +
                         "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
@@ -149,7 +152,7 @@ public class AutoPilotService extends Service {
                 return;
             }
 
-            // ৩. সাধারণ লাইক (Desktop Mode - www.facebook.com)
+            // ৩. সাধারণ লাইক (Desktop Mode)
             if (currentActionType.equalsIgnoreCase("Like")) {
                 serviceWebView.evaluateJavascript("window.scrollBy(0, 350);", unused -> {
                     mainHandler.postDelayed(() -> {
@@ -157,16 +160,18 @@ public class AutoPilotService extends Service {
                                 "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
                                 "var unlikes = document.querySelectorAll('[aria-label=\"Remove Like\"], [aria-label=\"Unlike\"], [aria-label=\"লাইক তুলে নিন\"]');" +
                                 "if (unlikes.length > 0) return 'ALREADY_LIKED';" +
-                                "var btns = document.querySelectorAll('div[role=\"button\"], span[role=\"button\"]');" +
+                                "var btns = document.querySelectorAll('div[role=\"button\"], span[role=\"button\"], button, a[role=\"button\"]');" +
                                 "for (var i = 0; i < btns.length; i++) {" +
-                                "  var a = (btns[i].getAttribute('aria-label') || '').trim();" +
-                                "  var t = (btns[i].innerText || '').trim();" +
-                                "  if (a === 'Like' || a === 'লাইক' || t === 'Like' || t === 'লাইক') {" +
+                                "  var a = (btns[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                                "  var t = (btns[i].innerText || '').trim().toLowerCase();" +
+                                "  var isLike = (a === 'like' || a === 'লাইক' || a === 'react' || a === 'leave a reaction' || a.startsWith('like this') || a.includes('other reactions') || t === 'like' || t === 'লাইক');" +
+                                "  if (isLike && !a.includes('including') && !a.includes('who reacted') && !a.includes('remove') && !a.includes('unlike')) {" +
                                 "    btns[i].scrollIntoView({block:'center'});" +
                                 "    btns[i].click(); return 'CLICKED';" +
                                 "  }" +
                                 "}" +
-                                "return 'NOT_FOUND_' + (document.title ? document.title.substring(0, 12) : 'EMPTY');" +
+                                "var lbs = []; document.querySelectorAll('[aria-label]').forEach(function(e){ var x=e.getAttribute('aria-label'); if(x && lbs.length<6) lbs.push(x); });" +
+                                "return 'NO_BTN|' + window.location.pathname.substring(0,15) + '|' + lbs.join(',');" +
                                 "})();";
                         runSingleStepJs(jsLike);
                     }, 1500);
@@ -174,7 +179,7 @@ public class AutoPilotService extends Service {
                 return;
             }
 
-            // ৪. কাস্টম রিঅ্যাকশন (Love, Haha, Wow, Sad, Angry - Desktop Mode Hover)
+            // ৪. কাস্টম রিঅ্যাকশন (Love, Haha, Wow, Sad, Angry)
             if (currentActionType.equalsIgnoreCase("Love") || currentActionType.equalsIgnoreCase("Haha") ||
                 currentActionType.equalsIgnoreCase("Wow") || currentActionType.equalsIgnoreCase("Sad") ||
                 currentActionType.equalsIgnoreCase("Angry")) {
@@ -183,11 +188,12 @@ public class AutoPilotService extends Service {
                     mainHandler.postDelayed(() -> {
                         String hoverJs = "(function() {" +
                                 "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
-                                "var btns = document.querySelectorAll('div[role=\"button\"], span[role=\"button\"]');" +
+                                "var btns = document.querySelectorAll('div[role=\"button\"], span[role=\"button\"], button, a[role=\"button\"]');" +
                                 "for (var i = 0; i < btns.length; i++) {" +
-                                "  var a = (btns[i].getAttribute('aria-label') || '').trim();" +
-                                "  var t = (btns[i].innerText || '').trim();" +
-                                "  if (a === 'Like' || a === 'লাইক' || t === 'Like' || t === 'লাইক' || a === 'Remove Like' || a === 'লাইক তুলে নিন') {" +
+                                "  var a = (btns[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                                "  var t = (btns[i].innerText || '').trim().toLowerCase();" +
+                                "  var isLike = (a === 'like' || a === 'লাইক' || a === 'react' || a === 'leave a reaction' || a.startsWith('like this') || a.includes('other reactions') || t === 'like' || t === 'লাইক' || a === 'remove like' || a === 'লাইক তুলে নিন');" +
+                                "  if (isLike && !a.includes('including') && !a.includes('who reacted')) {" +
                                 "    btns[i].scrollIntoView({block:'center'});" +
                                 "    btns[i].dispatchEvent(new MouseEvent('pointerover', {bubbles:true, cancelable:true}));" +
                                 "    btns[i].dispatchEvent(new MouseEvent('mouseover', {bubbles:true, cancelable:true}));" +
@@ -195,7 +201,8 @@ public class AutoPilotService extends Service {
                                 "    return 'HOVERED';" +
                                 "  }" +
                                 "}" +
-                                "return 'LIKE_NOT_FOUND';" +
+                                "var lbs = []; document.querySelectorAll('[aria-label]').forEach(function(e){ var x=e.getAttribute('aria-label'); if(x && lbs.length<6) lbs.push(x); });" +
+                                "return 'NO_BTN|' + window.location.pathname.substring(0,15) + '|' + lbs.join(',');" +
                                 "})();";
 
                         serviceWebView.evaluateJavascript(hoverJs, res -> {
@@ -225,7 +232,7 @@ public class AutoPilotService extends Service {
                                         "return 'TRAY_NOT_OPEN';" +
                                         "})();";
                                 runSingleStepJs(clickReactJs);
-                            }, 1600);
+                            }, 1800);
                         });
                     }, 1500);
                 });
@@ -352,7 +359,7 @@ public class AutoPilotService extends Service {
         }
 
         if (isBusy) {
-            if (System.currentTimeMillis() - busyStartTime > 45000) {
+            if (System.currentTimeMillis() - busyStartTime > 50000) {
                 isBusy = false;
             } else {
                 return;
@@ -405,7 +412,6 @@ public class AutoPilotService extends Service {
     private void runBackgroundWebView(String targetUrl, String cookieStr, String actionType) {
         serviceWebView.resumeTimers();
 
-        // ফলো বাদে অন্য সব কাজের জন্য ডেস্কটপ ভিউ ব্যবহার করা হবে (যাতে লাইক/রিঅ্যাক্ট বাটন মিস না হয়)
         boolean useDesktop = !actionType.equalsIgnoreCase("Follow");
 
         if (useDesktop) {
