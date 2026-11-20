@@ -49,6 +49,7 @@ public class AutoPilotService extends Service {
     private int currentOrderId = 0;
     private String currentFbUid = "";
     private String currentActionType = "Follow";
+    private String currentCommentText = "";
     private int currentWorkerId = 0;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -64,7 +65,6 @@ public class AutoPilotService extends Service {
         }
 
         serviceWebView = new WebView(getApplicationContext());
-        // ব্যাকগ্রাউন্ডে ফুল মোবাইল স্ক্রিন রেন্ডার করার জন্য জরুরি সেটিংস
         serviceWebView.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         serviceWebView.measure(
                 View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY),
@@ -97,7 +97,7 @@ public class AutoPilotService extends Service {
             public void onPageFinished(WebView view, String url) {
                 if (isFollowingTask && !url.equals("about:blank")) {
                     mainHandler.removeCallbacks(executeJsRunnable);
-                    int delay = currentActionType.equalsIgnoreCase("View") ? 15000 : 6000;
+                    int delay = currentActionType.equalsIgnoreCase("View") ? 18000 : 6000;
                     mainHandler.postDelayed(executeJsRunnable, delay);
                 }
             }
@@ -118,41 +118,174 @@ public class AutoPilotService extends Service {
             if (!isFollowingTask) return;
             isFollowingTask = false;
 
+            // ১. ভিডিও ভিউ (View)
             if (currentActionType.equalsIgnoreCase("View")) {
-                finishTaskOnServer("CLICKED");
+                serviceWebView.evaluateJavascript("var v=document.querySelector('video'); if(v) v.play(); 'VIEWED';", r -> {
+                    mainHandler.postDelayed(() -> {
+                        serviceWebView.loadUrl("about:blank");
+                        finishTaskOnServer("CLICKED");
+                    }, 3000);
+                });
                 return;
             }
 
-            String jsCode = "(function() {" +
-                    "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
-                    "var already = document.querySelector('[aria-label=\"Following\"], [aria-label=\"ফলো করছেন\"], [aria-label=\"Liked\"], [aria-label=\"লাইক করেছেন\"]');" +
-                    "if (already) return 'ALREADY';" +
-                    "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, div[tabindex=\"0\"], span, a');" +
-                    "for (var i = 0; i < els.length; i++) {" +
-                    "  var t = (els[i].innerText || '').trim().toLowerCase();" +
-                    "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
-                    "  if (t === 'follow' || t === 'ফলো করুন' || a === 'follow' || a === 'ফলো করুন' || " +
-                    "      t === 'like' || t === 'লাইক' || a === 'like' || a === 'লাইক' || " +
-                    "      t === 'add friend' || a === 'add friend' || t === 'বন্ধু হিসেবে যোগ করুন') {" +
-                    "    els[i].scrollIntoView();" +
-                    "    els[i].click(); return 'CLICKED';" +
-                    "  }" +
-                    "}" +
-                    "return 'NOT_FOUND_' + (document.title ? document.title.substring(0, 15) : '');" +
-                    "})();";
+            // ২. ফলো (Follow)
+            if (currentActionType.equalsIgnoreCase("Follow")) {
+                String jsFollow = "(function() {" +
+                        "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
+                        "var already = document.querySelector('[aria-label=\"Following\"], [aria-label=\"ফলো করছেন\"], [aria-label=\"Cancel request\"]');" +
+                        "if (already) return 'ALREADY_FOLLOWING';" +
+                        "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, div[tabindex=\"0\"], span, a');" +
+                        "for (var i = 0; i < els.length; i++) {" +
+                        "  var t = (els[i].innerText || '').trim().toLowerCase();" +
+                        "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                        "  if (t === 'follow' || t === 'ফলো করুন' || a === 'follow' || a === 'ফলো করুন' || " +
+                        "      t === 'add friend' || a === 'add friend' || t === 'বন্ধু হিসেবে যোগ করুন') {" +
+                        "    els[i].scrollIntoView(); els[i].click(); return 'CLICKED';" +
+                        "  }" +
+                        "}" +
+                        "return 'NOT_FOUND';" +
+                        "})();";
+                runSingleStepJs(jsFollow);
+                return;
+            }
 
-            serviceWebView.evaluateJavascript(jsCode, result -> {
-                String cleanResult = result != null ? result.replace("\"", "") : "ERROR";
-                mainHandler.postDelayed(() -> {
-                    serviceWebView.loadUrl("about:blank");
-                    finishTaskOnServer(cleanResult);
-                }, 3000);
-            });
+            // ৩. লাইক (Default Like)
+            if (currentActionType.equalsIgnoreCase("Like")) {
+                String jsLike = "(function() {" +
+                        "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
+                        "var already = document.querySelector('[aria-label=\"Remove Like\"], [aria-label=\"Unlike\"], [aria-label=\"লাইক তুলে নিন\"]');" +
+                        "if (already) return 'ALREADY_LIKED';" +
+                        "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, div[tabindex=\"0\"], span');" +
+                        "for (var i = 0; i < els.length; i++) {" +
+                        "  var t = (els[i].innerText || '').trim().toLowerCase();" +
+                        "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                        "  if (t === 'like' || t === 'লাইক' || a === 'like' || a === 'লাইক') {" +
+                        "    els[i].scrollIntoView(); els[i].click(); return 'CLICKED';" +
+                        "  }" +
+                        "}" +
+                        "return 'NOT_FOUND';" +
+                        "})();";
+                runSingleStepJs(jsLike);
+                return;
+            }
+
+            // ৪. কাস্টম রিঅ্যাকশন (Love, Haha, Wow, Sad, Angry)
+            if (currentActionType.equalsIgnoreCase("Love") || currentActionType.equalsIgnoreCase("Haha") ||
+                currentActionType.equalsIgnoreCase("Wow") || currentActionType.equalsIgnoreCase("Sad") ||
+                currentActionType.equalsIgnoreCase("Angry")) {
+
+                String openTrayJs = "(function() {" +
+                        "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, span');" +
+                        "for (var i = 0; i < els.length; i++) {" +
+                        "  var t = (els[i].innerText || '').trim().toLowerCase();" +
+                        "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                        "  if (t === 'like' || t === 'লাইক' || a === 'like' || a === 'লাইক') {" +
+                        "    els[i].scrollIntoView();" +
+                        "    els[i].dispatchEvent(new MouseEvent('mouseover', {bubbles:true}));" +
+                        "    els[i].dispatchEvent(new TouchEvent('touchstart', {bubbles:true}));" +
+                        "    return 'TRAY_TRIGGERED';" +
+                        "  }" +
+                        "}" +
+                        "return 'NOT_FOUND';" +
+                        "})();";
+
+                serviceWebView.evaluateJavascript(openTrayJs, res -> {
+                    mainHandler.postDelayed(() -> {
+                        String reactTarget = currentActionType.toLowerCase();
+                        String banglaTarget = reactTarget;
+                        if (reactTarget.equals("love")) banglaTarget = "ভালোবাসা";
+                        else if (reactTarget.equals("haha")) banglaTarget = "হাহা";
+                        else if (reactTarget.equals("wow")) banglaTarget = "ওয়াও";
+                        else if (reactTarget.equals("sad")) banglaTarget = "দুঃখিত";
+                        else if (reactTarget.equals("angry")) banglaTarget = "রাগ";
+
+                        String clickReactJs = "(function() {" +
+                                "var els = document.querySelectorAll('[aria-label]');" +
+                                "for (var i = 0; i < els.length; i++) {" +
+                                "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                                "  if (a === '" + reactTarget + "' || a === '" + banglaTarget + "') {" +
+                                "    els[i].click(); return 'CLICKED';" +
+                                "  }" +
+                                "}" +
+                                "return 'REACT_NOT_FOUND';" +
+                                "})();";
+                        runSingleStepJs(clickReactJs);
+                    }, 1500);
+                });
+                return;
+            }
+
+            // ৫. পোস্ট শেয়ার (Share)
+            if (currentActionType.equalsIgnoreCase("Share")) {
+                String openShareJs = "(function() {" +
+                        "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, span');" +
+                        "for (var i = 0; i < els.length; i++) {" +
+                        "  var t = (els[i].innerText || '').trim().toLowerCase();" +
+                        "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
+                        "  if (t === 'share' || t === 'শেয়ার' || t === 'শেয়ার' || a.includes('share') || a.includes('শেয়ার')) {" +
+                        "    els[i].scrollIntoView(); els[i].click(); return 'OPENED';" +
+                        "  }" +
+                        "}" +
+                        "return 'NOT_FOUND';" +
+                        "})();";
+
+                serviceWebView.evaluateJavascript(openShareJs, res -> {
+                    mainHandler.postDelayed(() -> {
+                        String clickShareNowJs = "(function() {" +
+                                "var els = document.querySelectorAll('div[role=\"menuitem\"], div[role=\"button\"], span, a');" +
+                                "for (var i = 0; i < els.length; i++) {" +
+                                "  var t = (els[i].innerText || '').trim().toLowerCase();" +
+                                "  if (t.includes('share now') || t.includes('এখনই শেয়ার') || t.includes('এখনই শেয়ার') || t.includes('share to feed')) {" +
+                                "    els[i].click(); return 'CLICKED';" +
+                                "  }" +
+                                "}" +
+                                "return 'SHARE_NOW_NOT_FOUND';" +
+                                "})();";
+                        runSingleStepJs(clickShareNowJs);
+                    }, 2500);
+                });
+                return;
+            }
+
+            // ৬. পোস্ট কমেন্ট (Comment)
+            if (currentActionType.equalsIgnoreCase("Comment")) {
+                String safeComment = currentCommentText.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ");
+                if (safeComment.isEmpty()) safeComment = "Nice!";
+                String jsComment = "(function() {" +
+                        "var box = document.querySelector('textarea, div[role=\"textbox\"], input[placeholder*=\"comment\"], input[placeholder*=\"মন্তব্য\"]');" +
+                        "if (box) {" +
+                        "  box.focus();" +
+                        "  if (box.tagName === 'TEXTAREA' || box.tagName === 'INPUT') { box.value = '" + safeComment + "'; } else { box.innerText = '" + safeComment + "'; }" +
+                        "  box.dispatchEvent(new Event('input', {bubbles:true}));" +
+                        "  var btns = document.querySelectorAll('button, div[role=\"button\"], input[type=\"submit\"]');" +
+                        "  for (var i = 0; i < btns.length; i++) {" +
+                        "    var a = (btns[i].getAttribute('aria-label') || '').toLowerCase();" +
+                        "    var t = (btns[i].innerText || '').trim().toLowerCase();" +
+                        "    if (a.includes('post') || a.includes('comment') || a.includes('পোস্ট') || t === 'post' || t === 'পোস্ট') {" +
+                        "      btns[i].click(); return 'CLICKED';" +
+                        "    }" +
+                        "  }" +
+                        "}" +
+                        "return 'NOT_FOUND';" +
+                        "})();";
+                runSingleStepJs(jsComment);
+            }
         }
     };
 
+    private void runSingleStepJs(String js) {
+        serviceWebView.evaluateJavascript(js, result -> {
+            String cleanResult = result != null ? result.replace("\"", "") : "ERROR";
+            mainHandler.postDelayed(() -> {
+                serviceWebView.loadUrl("about:blank");
+                finishTaskOnServer(cleanResult);
+            }, 3000);
+        });
+    }
+
     private void finishTaskOnServer(String status) {
-        if (status.equals("CLICKED") || status.equals("ALREADY")) {
+        if (status.equals("CLICKED")) {
             networkExecutor.execute(() -> {
                 try {
                     JSONObject body = new JSONObject();
@@ -161,14 +294,14 @@ public class AutoPilotService extends Service {
                     body.put("fb_uid", currentFbUid);
                     body.put("action_type", currentActionType);
                     httpPost(SERVER_URL + "/api/complete-task", body.toString());
-                    setLiveStatus("✅ আইডি (" + currentFbUid + ") অর্ডার #" + currentOrderId + " সম্পন্ন করেছে!");
+                    setLiveStatus("✅ আইডি (" + currentFbUid + ") [" + currentActionType + "] সম্পন্ন করেছে!");
                 } catch (Exception e) {
-                    setLiveStatus("⚠️ সার্ভার আপডেট এরর: " + e.getMessage());
+                    setLiveStatus("⚠️ সার্ভার আপডেট এরর");
                 }
                 isBusy = false;
             });
         } else {
-            setLiveStatus("⚠️ অর্ডার #" + currentOrderId + " (" + currentFbUid + "): " + status);
+            setLiveStatus("⚠️ অর্ডার #" + currentOrderId + " (" + currentActionType + "): " + status);
             isBusy = false;
         }
     }
@@ -193,7 +326,7 @@ public class AutoPilotService extends Service {
         }
 
         if (isBusy) {
-            if (System.currentTimeMillis() - busyStartTime > 35000) {
+            if (System.currentTimeMillis() - busyStartTime > 40000) {
                 isBusy = false;
             } else {
                 return;
@@ -219,6 +352,7 @@ public class AutoPilotService extends Service {
                         int orderId = taskJson.getInt("order_id");
                         String targetUrl = taskJson.getString("target_link");
                         String actionType = taskJson.optString("action_type", "Follow");
+                        String commentText = taskJson.optString("comment_text", "");
 
                         String cookieStr = getLocalOrDecodeCookie(uid, b64Cookie);
                         if (!cookieStr.isEmpty()) {
@@ -228,12 +362,11 @@ public class AutoPilotService extends Service {
                             currentOrderId = orderId;
                             currentFbUid = uid;
                             currentActionType = actionType;
+                            currentCommentText = commentText;
 
-                            setLiveStatus("🚀 আইডি (" + uid + ") দিয়ে অর্ডার #" + orderId + " ফলো চলছে...");
+                            setLiveStatus("🚀 আইডি (" + uid + ") দিয়ে [" + actionType + "] চলছে...");
                             mainHandler.post(() -> runBackgroundWebView(targetUrl, cookieStr));
                             break;
-                        } else {
-                            setLiveStatus("⚠️ আইডি (" + uid + ") এর কুকি পাওয়া যায়নি!");
                         }
                     }
                 }
