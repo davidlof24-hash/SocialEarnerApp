@@ -1,324 +1,248 @@
 package com.earner.app;
 
 import android.annotation.SuppressLint;
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.app.Service;
+import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.ServiceInfo;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.net.http.SslError;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
-import android.os.IBinder;
 import android.os.Looper;
-import android.os.PowerManager;
 import android.util.Base64;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.SslErrorHandler;
-import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import org.json.JSONArray;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.Toast;
 import org.json.JSONObject;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
-public class AutoPilotService extends Service {
-    private static final String CHANNEL_ID = "F2fearnAutoPilotChannel";
-    private static final String SERVER_URL = "https://devid01895.pythonanywhere.com";
+public class MainActivity extends Activity {
+    private WebView mainWebView;
+    private WebView fbLoginWebView;
+    private LinearLayout fbLoginContainer;
 
-    private WebView serviceWebView;
-    private Handler mainHandler = new Handler(Looper.getMainLooper());
-    private ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
+    private final String APP_URL = "https://devid01895.pythonanywhere.com/app";
+    private boolean loginHandled = false;
+
     private SharedPreferences prefs;
-    private PowerManager.WakeLock wakeLock;
-
-    private boolean isBusy = false;
-    private long busyStartTime = 0;
-    private boolean isFollowingTask = false;
-    private int currentOrderId = 0;
-    private String currentFbUid = "";
-    private String currentActionType = "Follow";
-    private int currentWorkerId = 0;
+    private Handler loginCheckHandler = new Handler(Looper.getMainLooper());
+    private Runnable loginCheckRunnable;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
-    public void onCreate() {
-        super.onCreate();
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("FB_ACCOUNTS_VAULT", MODE_PRIVATE);
 
-        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        if (pm != null) {
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "F2fearn::AutoPilotLock");
-            wakeLock.acquire();
+        // Android 13+ নোটিফিকেশন পারমিশন চাওয়া (যাতে ব্যাকগ্রাউন্ড সার্ভিস চালু থাকে)
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 101);
+            }
         }
 
-        // ব্যাকগ্রাউন্ডের নিজস্ব WebView তৈরি
-        serviceWebView = new WebView(getApplicationContext());
-        WebSettings ws = serviceWebView.getSettings();
-        ws.setJavaScriptEnabled(true);
-        ws.setDomStorageEnabled(true);
-        ws.setDatabaseEnabled(true);
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(serviceWebView, true);
+        // ব্যাকগ্রাউন্ড অটো-পাইলট সার্ভিস চালু করা
+        Intent serviceIntent = new Intent(this, AutoPilotService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent);
+        } else {
+            startService(serviceIntent);
+        }
 
-        serviceWebView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                String url = request.getUrl().toString();
-                return !url.startsWith("http://") && !url.startsWith("https://");
-            }
+        FrameLayout rootLayout = new FrameLayout(this);
+        rootLayout.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        // ১. মেইন ড্যাশবোর্ড WebView
+        mainWebView = new WebView(this);
+        setupWebView(mainWebView);
+        mainWebView.setBackgroundColor(Color.parseColor("#F8F9FC"));
+        mainWebView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
+        mainWebView.setWebViewClient(new WebViewClient() {
             @Override
             public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
                 handler.proceed();
             }
+        });
+        rootLayout.addView(mainWebView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        // ২. ফেসবুক লগইন পপ-আপ
+        fbLoginContainer = new LinearLayout(this);
+        fbLoginContainer.setOrientation(LinearLayout.VERTICAL);
+        fbLoginContainer.setBackgroundColor(Color.WHITE);
+        fbLoginContainer.setVisibility(View.GONE);
+
+        LinearLayout topBar = new LinearLayout(this);
+        topBar.setOrientation(LinearLayout.HORIZONTAL);
+        topBar.setBackgroundColor(Color.parseColor("#FF1878"));
+        topBar.setPadding(15, 15, 15, 15);
+        topBar.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText("ফেসবুক আইডি লগইন");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(15);
+        title.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button saveNowBtn = new Button(this);
+        saveNowBtn.setText("✅ সেভ করুন");
+        saveNowBtn.setBackgroundColor(Color.parseColor("#10B981"));
+        saveNowBtn.setTextColor(Color.WHITE);
+        saveNowBtn.setOnClickListener(v -> checkAndSaveLogin(true));
+
+        Button closeBtn = new Button(this);
+        closeBtn.setText("বাতিল");
+        closeBtn.setOnClickListener(v -> {
+            prefs.edit().putBoolean("is_user_logging_in", false).apply();
+            loginCheckHandler.removeCallbacksAndMessages(null);
+            fbLoginContainer.setVisibility(View.GONE);
+        });
+
+        topBar.addView(title);
+        topBar.addView(saveNowBtn);
+        topBar.addView(closeBtn);
+        fbLoginContainer.addView(topBar);
+
+        fbLoginWebView = new WebView(this);
+        setupWebView(fbLoginWebView);
+        fbLoginWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                handler.proceed();
+            }
             @Override
             public void onPageFinished(WebView view, String url) {
-                if (isFollowingTask && !url.equals("about:blank")) {
-                    mainHandler.removeCallbacks(executeJsRunnable);
-                    int delay = currentActionType.equalsIgnoreCase("View") ? 15000 : 5500;
-                    mainHandler.postDelayed(executeJsRunnable, delay);
-                }
+                checkAndSaveLogin(false);
             }
         });
+        fbLoginContainer.addView(fbLoginWebView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        startAutoLoop();
+        rootLayout.addView(fbLoginContainer, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        setContentView(rootLayout);
+        mainWebView.loadUrl(APP_URL);
     }
 
-    private final Runnable executeJsRunnable = new Runnable() {
-        @Override
-        public void run() {
-            if (!isFollowingTask) return;
-            isFollowingTask = false;
+    private void checkAndSaveLogin(boolean manualClick) {
+        if (loginHandled) return;
+        CookieManager.getInstance().flush();
+        String c1 = CookieManager.getInstance().getCookie("https://m.facebook.com");
+        String c2 = CookieManager.getInstance().getCookie("https://www.facebook.com");
+        String cookies = (c1 != null && c1.contains("c_user=")) ? c1 : c2;
 
-            if (currentActionType.equalsIgnoreCase("View")) {
-                finishTaskOnServer("CLICKED");
+        if (cookies != null && cookies.contains("c_user=")) {
+            String uid = "";
+            for (String part : cookies.split(";")) {
+                String p = part.trim();
+                if (p.startsWith("c_user=")) {
+                    uid = p.substring(7);
+                    break;
+                }
+            }
+            if (!uid.isEmpty()) {
+                loginHandled = true;
+                prefs.edit().putBoolean("is_user_logging_in", false).apply();
+                loginCheckHandler.removeCallbacksAndMessages(null);
+                saveFbCookie(uid, cookies);
+                String b64Cookie = "";
+                try {
+                    b64Cookie = Base64.encodeToString(cookies.getBytes("UTF-8"), Base64.NO_WRAP);
+                } catch (Exception ignored) {}
+                final String finalUid = uid;
+                final String finalB64 = b64Cookie;
+                runOnUiThread(() -> {
+                    fbLoginContainer.setVisibility(View.GONE);
+                    Toast.makeText(MainActivity.this, "আইডি (" + finalUid + ") সেভ হয়েছে!", Toast.LENGTH_SHORT).show();
+                    mainWebView.evaluateJavascript("if(window.onNativeFbAdded) window.onNativeFbAdded('" + finalUid + "', '" + finalB64 + "');", null);
+                });
                 return;
             }
-
-            String jsCode = "(function() {" +
-                    "if (document.querySelector('input[name=\"email\"], input[name=\"pass\"]')) return 'LOGGED_OUT';" +
-                    "var already = document.querySelector('[aria-label=\"Following\"], [aria-label=\"ফলো করছেন\"], [aria-label=\"Liked\"], [aria-label=\"লাইক করেছেন\"]');" +
-                    "if (already) return 'ALREADY';" +
-                    "var els = document.querySelectorAll('div[role=\"button\"], a[role=\"button\"], button, div[tabindex=\"0\"], span, a');" +
-                    "for (var i = 0; i < els.length; i++) {" +
-                    "  var t = (els[i].innerText || '').trim().toLowerCase();" +
-                    "  var a = (els[i].getAttribute('aria-label') || '').trim().toLowerCase();" +
-                    "  if (t === 'follow' || t === 'ফলো করুন' || a === 'follow' || a === 'ফলো করুন' || " +
-                    "      t === 'like' || t === 'লাইক' || a === 'like' || a === 'লাইক' || " +
-                    "      t === 'add friend' || a === 'add friend' || t === 'বন্ধু হিসেবে যোগ করুন') {" +
-                    "    els[i].scrollIntoView();" +
-                    "    els[i].click(); return 'CLICKED';" +
-                    "  }" +
-                    "}" +
-                    "return 'NOT_FOUND';" +
-                    "})();";
-
-            serviceWebView.evaluateJavascript(jsCode, result -> {
-                String cleanResult = result != null ? result.replace("\"", "") : "ERROR";
-                mainHandler.postDelayed(() -> {
-                    serviceWebView.loadUrl("about:blank");
-                    finishTaskOnServer(cleanResult);
-                }, 3000);
-            });
         }
-    };
-
-    private void finishTaskOnServer(String status) {
-        if (status.equals("CLICKED") || status.equals("ALREADY")) {
-            networkExecutor.execute(() -> {
-                try {
-                    JSONObject body = new JSONObject();
-                    body.put("worker_id", currentWorkerId);
-                    body.put("order_id", currentOrderId);
-                    body.put("fb_uid", currentFbUid);
-                    body.put("action_type", currentActionType);
-                    httpPost(SERVER_URL + "/api/complete-task", body.toString());
-                } catch (Exception ignored) {}
-                isBusy = false;
-            });
-        } else {
-            isBusy = false;
+        if (manualClick) {
+            Toast.makeText(this, "আগে ফেসবুকে লগইন সম্পন্ন করুন!", Toast.LENGTH_SHORT).show();
         }
     }
 
-    private void startAutoLoop() {
-        mainHandler.postDelayed(new Runnable() {
+    private void startLoginPolling() {
+        loginCheckRunnable = new Runnable() {
             @Override
             public void run() {
-                checkServerForTasks();
-                mainHandler.postDelayed(this, 12000); // প্রতি ১২ সেকেন্ড পর পর ব্যাকগ্রাউন্ডে চেক
-            }
-        }, 5000);
-    }
-
-    private void checkServerForTasks() {
-        if (prefs.getBoolean("is_user_logging_in", false)) return;
-
-        int workerId = prefs.getInt("active_worker_id", 0);
-        if (workerId <= 0) return;
-
-        if (isBusy) {
-            if (System.currentTimeMillis() - busyStartTime > 35000) {
-                isBusy = false;
-            } else {
-                return;
-            }
-        }
-
-        networkExecutor.execute(() -> {
-            try {
-                String accRes = httpGet(SERVER_URL + "/api/my-fb-accounts?worker_id=" + workerId);
-                JSONObject accJson = new JSONObject(accRes);
-                JSONArray accounts = accJson.optJSONArray("accounts");
-                if (accounts == null || accounts.length() == 0) return;
-
-                for (int i = 0; i < accounts.length(); i++) {
-                    JSONObject acc = accounts.getJSONObject(i);
-                    String uid = acc.getString("fb_uid");
-                    String b64Cookie = acc.optString("fb_cookie", "");
-
-                    String taskRes = httpGet(SERVER_URL + "/api/get-task?fb_uid=" + uid + "&worker_id=" + workerId);
-                    JSONObject taskJson = new JSONObject(taskRes);
-
-                    if (taskJson.optBoolean("has_task", false)) {
-                        int orderId = taskJson.getInt("order_id");
-                        String targetUrl = taskJson.getString("target_link");
-                        String actionType = taskJson.optString("action_type", "Follow");
-
-                        String cookieStr = getLocalOrDecodeCookie(uid, b64Cookie);
-                        if (!cookieStr.isEmpty()) {
-                            isBusy = true;
-                            busyStartTime = System.currentTimeMillis();
-                            currentWorkerId = workerId;
-                            currentOrderId = orderId;
-                            currentFbUid = uid;
-                            currentActionType = actionType;
-
-                            mainHandler.post(() -> runBackgroundWebView(targetUrl, cookieStr));
-                            break;
-                        }
-                    }
-                }
-            } catch (Exception ignored) {}
-        });
-    }
-
-    private void runBackgroundWebView(String targetUrl, String cookieStr) {
-        CookieManager cm = CookieManager.getInstance();
-        cm.removeAllCookies(unused -> {
-            for (String pair : cookieStr.split(";")) {
-                String p = pair.trim();
-                if (!p.isEmpty()) {
-                    cm.setCookie("https://facebook.com", p + "; Domain=.facebook.com; Path=/");
-                    cm.setCookie("https://m.facebook.com", p + "; Domain=.facebook.com; Path=/");
+                if (!loginHandled && fbLoginContainer.getVisibility() == View.VISIBLE) {
+                    checkAndSaveLogin(false);
+                    loginCheckHandler.postDelayed(this, 1500);
                 }
             }
-            cm.flush();
-            String mobileUrl = targetUrl.replace("www.facebook.com", "m.facebook.com").replace("web.facebook.com", "m.facebook.com");
-            isFollowingTask = true;
-            serviceWebView.loadUrl(mobileUrl);
-        });
+        };
+        loginCheckHandler.postDelayed(loginCheckRunnable, 1500);
     }
 
-    private String getLocalOrDecodeCookie(String uid, String b64) {
+    @SuppressLint("SetJavaScriptEnabled")
+    private void setupWebView(WebView wv) {
+        WebSettings ws = wv.getSettings();
+        ws.setJavaScriptEnabled(true);
+        ws.setDomStorageEnabled(true);
+        ws.setDatabaseEnabled(true);
+        ws.setAllowFileAccess(true);
+        ws.setAllowContentAccess(true);
+        CookieManager.getInstance().setAcceptCookie(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true);
+    }
+
+    private void saveFbCookie(String uid, String cookieStr) {
         try {
             String jsonStr = prefs.getString("cookies_map", "{}");
             JSONObject obj = new JSONObject(jsonStr);
-            String c = obj.optString(uid, "");
-            if (!c.isEmpty()) return c;
-            if (b64 != null && !b64.isEmpty()) {
-                return new String(Base64.decode(b64, Base64.DEFAULT), "UTF-8");
-            }
-        } catch (Exception ignored) {}
-        return "";
+            obj.put(uid, cookieStr);
+            prefs.edit().putString("cookies_map", obj.toString()).apply();
+        } catch (Exception e) { e.printStackTrace(); }
     }
 
-    private String httpGet(String urlStr) throws Exception {
-        URL url = new URL(urlStr);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("GET");
-        conn.setConnectTimeout(10000);
-        conn.setReadTimeout(10000);
-        BufferedReader in = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-        StringBuilder sb = new StringBuilder();
-        String line;
-        while ((line = in.readLine()) != null) sb.append(line);
-        in.close();
-        return sb.toString();
-    }
+    public class AndroidBridge {
+        @JavascriptInterface
+        public void setWorkerId(int workerId) {
+            prefs.edit().putInt("active_worker_id", workerId).apply();
+        }
 
-    private void httpPost(String urlStr, String jsonBody) throws Exception {
-        URL url = new URL(urlStr);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setRequestProperty("Content-Type", "application/json");
-        conn.setDoOutput(true);
-        OutputStream os = conn.getOutputStream();
-        os.write(jsonBody.getBytes("UTF-8"));
-        os.close();
-        conn.getResponseCode();
+        @JavascriptInterface
+        public void openFbLogin() {
+            runOnUiThread(() -> {
+                loginHandled = false;
+                prefs.edit().putBoolean("is_user_logging_in", true).apply();
+                CookieManager.getInstance().removeAllCookies(unused -> {
+                    CookieManager.getInstance().flush();
+                    fbLoginContainer.setVisibility(View.VISIBLE);
+                    fbLoginWebView.loadUrl("https://m.facebook.com");
+                    startLoginPolling();
+                });
+            });
+        }
     }
 
     @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        createNotificationChannel();
-        Intent notificationIntent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
-
-        Notification.Builder builder;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            builder = new Notification.Builder(this, CHANNEL_ID);
+    public void onBackPressed() {
+        if (fbLoginContainer.getVisibility() == View.VISIBLE) {
+            prefs.edit().putBoolean("is_user_logging_in", false).apply();
+            loginCheckHandler.removeCallbacksAndMessages(null);
+            fbLoginContainer.setVisibility(View.GONE);
+        } else if (mainWebView.canGoBack()) {
+            mainWebView.goBack();
         } else {
-            builder = new Notification.Builder(this);
+            super.onBackPressed();
         }
-
-        Notification notification = builder
-                .setContentTitle("⚡ F2fearn Auto-Pilot চালু আছে")
-                .setContentText("অ্যাপ বন্ধ থাকলেও ব্যাকগ্রাউন্ডে অটো ইনকাম চলছে...")
-                .setSmallIcon(android.R.drawable.stat_notify_sync)
-                .setContentIntent(pendingIntent)
-                .setOngoing(true)
-                .build();
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(101, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
-        } else {
-            startForeground(101, notification);
-        }
-
-        return START_STICKY;
-    }
-
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID, "F2fearn Auto-Pilot", NotificationManager.IMPORTANCE_LOW);
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) manager.createNotificationChannel(channel);
-        }
-    }
-
-    @Override
-    public void onDestroy() {
-        super.onDestroy();
-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        mainHandler.removeCallbacksAndMessages(null);
-    }
-
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
     }
 }
