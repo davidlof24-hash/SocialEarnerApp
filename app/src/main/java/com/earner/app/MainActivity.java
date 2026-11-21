@@ -2,10 +2,14 @@ package com.earner.app;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
@@ -18,6 +22,8 @@ import android.view.ViewGroup;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.SslErrorHandler;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -46,14 +52,12 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("FB_ACCOUNTS_VAULT", MODE_PRIVATE);
 
-        // Android 13+ নোটিফিকেশন পারমিশন চাওয়া (যাতে ব্যাকগ্রাউন্ড সার্ভিস চালু থাকে)
         if (Build.VERSION.SDK_INT >= 33) {
             if (checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 101);
             }
         }
 
-        // ব্যাকগ্রাউন্ড অটো-পাইলট সার্ভিস চালু করা
         Intent serviceIntent = new Intent(this, AutoPilotService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent);
@@ -65,12 +69,25 @@ public class MainActivity extends Activity {
         rootLayout.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // ১. মেইন ড্যাশবোর্ড WebView
         mainWebView = new WebView(this);
         setupWebView(mainWebView);
         mainWebView.setBackgroundColor(Color.parseColor("#F8F9FC"));
         mainWebView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
+        mainWebView.setWebChromeClient(new WebChromeClient());
         mainWebView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                if (!url.startsWith("https://devid01895.pythonanywhere.com")) {
+                    try {
+                        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                        startActivity(intent);
+                    } catch (Exception ignored) {}
+                    return true;
+                }
+                return false;
+            }
+
             @Override
             public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
                 handler.proceed();
@@ -79,7 +96,6 @@ public class MainActivity extends Activity {
         rootLayout.addView(mainWebView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // ২. ফেসবুক লগইন পপ-আপ
         fbLoginContainer = new LinearLayout(this);
         fbLoginContainer.setOrientation(LinearLayout.VERTICAL);
         fbLoginContainer.setBackgroundColor(Color.WHITE);
@@ -118,6 +134,7 @@ public class MainActivity extends Activity {
 
         fbLoginWebView = new WebView(this);
         setupWebView(fbLoginWebView);
+        fbLoginWebView.setWebChromeClient(new WebChromeClient());
         fbLoginWebView.setWebViewClient(new WebViewClient() {
             @Override
             public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
@@ -217,10 +234,32 @@ public class MainActivity extends Activity {
         public void setWorkerId(int workerId) {
             prefs.edit().putInt("active_worker_id", workerId).apply();
         }
-@JavascriptInterface
+
+        @JavascriptInterface
         public String getLiveStatus() {
             return prefs.getString("live_status", "⚡ অটো-পাইলট সচল আছে...");
         }
+
+        @JavascriptInterface
+        public void removeFbCookie(String uid) {
+            try {
+                String jsonStr = prefs.getString("cookies_map", "{}");
+                JSONObject obj = new JSONObject(jsonStr);
+                obj.remove(uid);
+                prefs.edit().putString("cookies_map", obj.toString()).apply();
+            } catch (Exception e) { e.printStackTrace(); }
+        }
+
+        @JavascriptInterface
+        public void copyToClipboard(String text) {
+            runOnUiThread(() -> {
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (clipboard != null) {
+                    clipboard.setPrimaryClip(ClipData.newPlainText("F2fearn", text));
+                }
+            });
+        }
+
         @JavascriptInterface
         public void openFbLogin() {
             runOnUiThread(() -> {
